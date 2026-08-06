@@ -119,14 +119,15 @@ class MainActivity : AppCompatActivity() {
                 .build()
                 .also { it.setAnalyzer(analysisExecutor, ::analyze) }
 
-            imageCapture = ImageCapture.Builder()
+            val capture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                 .build()
+            imageCapture = capture
 
             runCatching {
                 provider.unbindAll()
                 provider.bindToLifecycle(
-                    this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis, imageCapture
+                    this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis, capture
                 )
             }.onFailure {
                 Log.e(TAG, "Use case binding failed", it)
