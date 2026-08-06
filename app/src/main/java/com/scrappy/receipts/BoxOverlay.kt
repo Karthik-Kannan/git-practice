@@ -18,7 +18,18 @@ class BoxOverlay @JvmOverloads constructor(
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
 
-    data class Box(val rect: Rect, val hasMoney: Boolean)
+    enum class Style {
+        /** Receipt text. */
+        TEXT,
+
+        /** Receipt text carrying an amount. */
+        MONEY,
+
+        /** Read, but judged not to be part of the receipt. */
+        REJECTED
+    }
+
+    data class Box(val rect: Rect, val style: Style)
 
     private var boxes: List<Box> = emptyList()
     private var sourceWidth = 0
@@ -39,6 +50,13 @@ class BoxOverlay @JvmOverloads constructor(
     private val moneyFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = Color.argb(38, 74, 222, 128)
+    }
+
+    /** Faint, so you can see what was discarded without it competing for attention. */
+    private val rejectedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = dp(1f)
+        color = Color.argb(70, 248, 113, 113)
     }
 
     private val scratch = RectF()
@@ -74,11 +92,13 @@ class BoxOverlay @JvmOverloads constructor(
                 box.rect.right * scale + offsetX,
                 box.rect.bottom * scale + offsetY
             )
-            if (box.hasMoney) {
-                canvas.drawRoundRect(scratch, radius, radius, moneyFill)
-                canvas.drawRoundRect(scratch, radius, radius, moneyStroke)
-            } else {
-                canvas.drawRoundRect(scratch, radius, radius, textPaint)
+            when (box.style) {
+                Style.MONEY -> {
+                    canvas.drawRoundRect(scratch, radius, radius, moneyFill)
+                    canvas.drawRoundRect(scratch, radius, radius, moneyStroke)
+                }
+                Style.TEXT -> canvas.drawRoundRect(scratch, radius, radius, textPaint)
+                Style.REJECTED -> canvas.drawRoundRect(scratch, radius, radius, rejectedPaint)
             }
         }
     }

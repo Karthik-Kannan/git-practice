@@ -38,6 +38,19 @@ object ReceiptParser {
         "register", "server", "table", "qty", "description"
     )
 
+    /** Words that only show up once you're inside the body of a receipt. */
+    private val receiptBodyRe = words(
+        "total", "subtotal", "tax", "vat", "gst", "hst", "cash", "change",
+        "visa", "mastercard", "amex", "debit", "credit", "tender", "balance",
+        "due", "store", "register", "till", "trans", "auth", "cashier", "thank"
+    )
+
+    /** Lines to scan for a merchant when there's no receipt body to anchor to. */
+    private const val MERCHANT_SCAN = 6
+
+    /** How far above the receipt body a merchant is allowed to be. */
+    private const val MERCHANT_LOOKBACK = 4
+
     private val dateRes = listOf(
         Regex("""\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b"""),
         Regex("""\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b"""),
@@ -93,21 +106,48 @@ object ReceiptParser {
 
     // --- fields ----------------------------------------------------------
 
+    /**
+     * The merchant is the first name-like line above the receipt's body.
+     *
+     * Anchoring to the body rather than to the top of the frame matters when
+     * something else is in shot: text floating well above the first amount,
+     * date or payment line is much more likely to be a nearby flyer than the
+     * shop's name.
+     */
     private fun findMerchant(lines: List<String>): String? {
-        for (line in lines.take(6)) {
-            if (line.length < 3) continue
-            if (moneyIn(line).isNotEmpty()) continue
-            if (notAMerchantRe.containsMatchIn(line)) continue
+        val body = firstBodyLine(lines)
 
-            val letters = line.count { it.isLetter() }
-            val meaningful = line.count { !it.isWhitespace() }
-            if (letters < 3 || meaningful == 0) continue
-            if (letters.toDouble() / meaningful < 0.5) continue
-
-            val cleaned = line.trim(' ', '*', '-', '=', ':', '.', ',')
-            if (cleaned.length >= 3) return cleaned
+        if (body > 0) {
+            val window = lines.subList(maxOf(0, body - MERCHANT_LOOKBACK), body)
+            window.firstNotNullOfOrNull { merchantCandidate(it) }?.let { return it }
         }
-        return null
+
+        // No body found, or nothing name-like just above it: fall back to the top.
+        return lines.take(MERCHANT_SCAN).firstNotNullOfOrNull { merchantCandidate(it) }
+    }
+
+    /** Index of the first line that reads like the inside of a receipt, or -1. */
+    private fun firstBodyLine(lines: List<String>): Int {
+        for (i in lines.indices) {
+            val line = lines[i]
+            if (moneyIn(line).isNotEmpty()) return i
+            if (receiptBodyRe.containsMatchIn(line)) return i
+            if (dateRes.any { it.containsMatchIn(line) }) return i
+        }
+        return -1
+    }
+
+    private fun merchantCandidate(line: String): String? {
+        if (line.length < 3) return null
+        if (moneyIn(line).isNotEmpty()) return null
+        if (notAMerchantRe.containsMatchIn(line)) return null
+
+        val letters = line.count { it.isLetter() }
+        val meaningful = line.count { !it.isWhitespace() }
+        if (letters < 3 || meaningful == 0) return null
+        if (letters.toDouble() / meaningful < 0.5) return null
+
+        return line.trim(' ', '*', '-', '=', ':', '.', ',').takeIf { it.length >= 3 }
     }
 
     private fun findDate(lines: List<String>): String? {

@@ -3,6 +3,7 @@ package com.scrappy.receipts
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Rect
 import android.os.Bundle
 import android.util.Log
 import android.util.Size
@@ -146,14 +147,25 @@ class MainActivity : AppCompatActivity() {
         val frameWidth = proxy.width
         val frameHeight = proxy.height
 
+        // Read chroma here, on the analysis thread, while the frame is still open.
+        val saturation = SaturationSampler.from(mediaImage, rotation)
+
         recognizer.process(InputImage.fromMediaImage(mediaImage, rotation))
-            .addOnSuccessListener { text -> onTextRecognised(text, rotation, frameWidth, frameHeight) }
+            .addOnSuccessListener { text ->
+                onTextRecognised(text, saturation, rotation, frameWidth, frameHeight)
+            }
             .addOnFailureListener { Log.w(TAG, "OCR failed", it) }
             .addOnCompleteListener { proxy.close() }
     }
 
     /** Runs on the main thread — ML Kit posts callbacks there by default. */
-    private fun onTextRecognised(text: Text, rotation: Int, frameWidth: Int, frameHeight: Int) {
+    private fun onTextRecognised(
+        text: Text,
+        saturation: SaturationSampler?,
+        rotation: Int,
+        frameWidth: Int,
+        frameHeight: Int
+    ) {
         if (isDestroyed || isFinishing) return
 
         val rotated = rotation == 90 || rotation == 270
@@ -161,23 +173,43 @@ class MainActivity : AppCompatActivity() {
         val sourceHeight = if (rotated) frameWidth else frameHeight
 
         // Receipts are single-column, so top-to-bottom is a good enough reading order.
-        val lines = text.textBlocks
+        val scanned = text.textBlocks
             .flatMap { it.lines }
-            .sortedWith(compareBy({ it.boundingBox?.top ?: 0 }, { it.boundingBox?.left ?: 0 }))
+            .mapNotNull { line ->
+                val box = line.boundingBox ?: return@mapNotNull null
+                ScannedLine(
+                    text = line.text,
+                    left = box.left,
+                    top = box.top,
+                    right = box.right,
+                    bottom = box.bottom,
+                    saturation = saturation?.meanSaturation(box) ?: 0
+                )
+            }
+            .sortedWith(compareBy({ it.top }, { it.left }))
+
+        // Everything in frame gets read; only what looks like the receipt gets parsed.
+        val classified = FrameFilter.classify(scanned)
+        val receiptLines = classified.filter { it.isReceipt }
 
         binding.overlay.update(
-            lines.mapNotNull { line ->
-                line.boundingBox?.let {
-                    BoxOverlay.Box(it, ReceiptParser.moneyIn(line.text).isNotEmpty())
-                }
+            classified.map { line ->
+                BoxOverlay.Box(
+                    Rect(line.left, line.top, line.right, line.bottom),
+                    when {
+                        !line.isReceipt -> BoxOverlay.Style.REJECTED
+                        ReceiptParser.moneyIn(line.text).isNotEmpty() -> BoxOverlay.Style.MONEY
+                        else -> BoxOverlay.Style.TEXT
+                    }
+                )
             },
             sourceWidth,
             sourceHeight
         )
 
-        val stable = accumulator.push(ReceiptParser.parse(lines.map { it.text }))
+        val stable = accumulator.push(ReceiptParser.parse(receiptLines.map { it.text }))
         latest = stable
-        render(stable, lines.size)
+        render(stable, receiptLines.size)
     }
 
     private fun render(stable: ReceiptAccumulator.Stable, lineCount: Int) {

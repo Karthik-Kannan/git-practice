@@ -1,6 +1,7 @@
 package com.scrappy.receipts
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -37,6 +38,37 @@ class ReceiptParserTest {
         val parsed = ReceiptParser.parse(grocery)
         assertEquals(14.98, parsed.subtotal!!, 0.001)
         assertEquals(1.20, parsed.tax!!, 0.001)
+    }
+
+    @Test
+    fun `merchant is never taken from far above the receipt body`() {
+        // Anchoring bounds how far from the body a merchant can come. It does not
+        // rescue you from clutter sitting immediately above it — that is what
+        // FrameFilter removes before the parser ever sees these lines.
+        val lines = listOf(
+            "DISTANT POSTER ONE",
+            "DISTANT POSTER TWO",
+            "NEARBY POSTER",
+            "MORE POSTER",
+            "STILL POSTER",
+            "CORNER CAFE",
+            "TOTAL 12.00"
+        )
+        val merchant = ReceiptParser.parse(lines).merchant
+        assertNotEquals("DISTANT POSTER ONE", merchant)
+        assertNotEquals("DISTANT POSTER TWO", merchant)
+    }
+
+    @Test
+    fun `still finds a merchant sitting above a multi-line address`() {
+        val lines = listOf(
+            "TRADER JOE'S",
+            "5885 Meadow Expressway",
+            "San Jose, CA 95116",
+            "Store #0003",
+            "BANANAS 4.49"
+        )
+        assertEquals("TRADER JOE'S", ReceiptParser.parse(lines).merchant)
     }
 
     @Test
