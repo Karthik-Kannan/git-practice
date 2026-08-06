@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ReceiptSnap</string>
+    <string name="saved_receipts">Saved receipts</string>
+    <string name="receipt">Receipt</string>
+    <string name="capture">Capture</string>
+    <string name="camera_permission_rationale">ReceiptSnap needs the camera to read receipts.</string>
+    <string name="grant_permission">Grant camera access</string>
+    <string name="scanning">Point at a receipt&#8230;</string>
+    <string name="no_receipts">No receipts yet.\nScan one from the camera screen.</string>
+    <string name="delete">Delete</string>
+</resources>

@@ -1,0 +1,62 @@
+name: Build APK
+
+on:
+  push:
+    branches: [claude/android-receipt-capture-svsp65]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Ensure Android SDK packages
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Run parser unit tests
+        run: ./gradlew testDebugUnitTest
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Stage APK
+        id: stage
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/receiptsnap.apk
+          echo "size=$(du -h dist/receiptsnap.apk | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: receiptsnap-apk
+          path: dist/receiptsnap.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="apk-${{ github.run_number }}"
+          gh release create "$TAG" dist/receiptsnap.apk \
+            --title "ReceiptSnap APK (build ${{ github.run_number }})" \
+            --notes "Debug-signed APK (${{ steps.stage.outputs.size }}) built from \`${{ github.sha }}\`.
+
+          Download \`receiptsnap.apk\` below, then allow install from unknown sources on your phone." \
+            --target "${{ github.sha }}"
