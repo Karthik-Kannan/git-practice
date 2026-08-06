@@ -22,8 +22,11 @@ To install: allow "install from unknown sources" for your browser or file
 manager, then open the downloaded APK.
 
 The build is split per ABI because ML Kit's bundled OCR pipeline is ~11 MB of
-native code *per architecture* — most of the download is the text-recognition
-model, which is the price of scanning without a network round trip.
+native code *per architecture* (`libmlkit_google_ocr_pipeline.so`). That native
+inference engine — not the models — is the bulk of the download; the models
+themselves are only ~1.4 MB of TFLite graphs under
+`assets/mlkit-google-ocr-models/`. Both ship inside the APK, which is what lets
+scanning work with no network round trip.
 
 > Debug-signed, so it is not Play Store material — it is a sideload build.
 
