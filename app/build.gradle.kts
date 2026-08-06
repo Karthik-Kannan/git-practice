@@ -35,6 +35,18 @@ android {
     buildFeatures {
         viewBinding = true
     }
+
+    // The bundled OCR pipeline is ~11 MB of native code per architecture, which makes
+    // a universal APK ~48 MB. Split per ABI so a phone-sized download is ~18 MB, and
+    // keep the universal one around for anything unusual.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = true
+        }
+    }
 }
 
 dependencies {

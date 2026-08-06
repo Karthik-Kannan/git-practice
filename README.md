@@ -9,12 +9,21 @@ Everything runs offline — the OCR model is bundled into the APK.
 
 ## Getting the APK
 
-Each push to the build branch produces a debug-signed APK. Grab the latest from
+Each push to the build branch produces debug-signed APKs. Grab the latest from
 the [Releases page](../../releases), or from the **Build APK** workflow run's
 artifacts.
 
+Take **`receiptsnap-arm64.apk`** unless you know otherwise — every Android phone
+from roughly 2019 on is arm64. `receiptsnap-arm32.apk` covers older 32-bit
+devices, and `receiptsnap-universal.apk` bundles every architecture (including
+x86 emulators) at around 48 MB.
+
 To install: allow "install from unknown sources" for your browser or file
-manager, then open the downloaded `receiptsnap.apk`.
+manager, then open the downloaded APK.
+
+The build is split per ABI because ML Kit's bundled OCR pipeline is ~11 MB of
+native code *per architecture* — most of the download is the text-recognition
+model, which is the price of scanning without a network round trip.
 
 > Debug-signed, so it is not Play Store material — it is a sideload build.
 
