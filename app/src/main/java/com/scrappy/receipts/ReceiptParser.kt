@@ -12,8 +12,15 @@ object ReceiptParser {
     private fun words(vararg w: String) =
         Regex("""\b(${w.joinToString("|")})\b""", RegexOption.IGNORE_CASE)
 
-    /** Matches 1234.56 / 1,234.56 / 1.234,56 / -5.00, optionally with a currency symbol. */
-    private val moneyRe = Regex("""(-)?\s*[$€£₹¥]?\s*(\d{1,3}(?:[,.]\d{3})*|\d+)[.,](\d{2})(?!\d)""")
+    /**
+     * Matches 1234.56 / 1,234.56 / 1.234,56 / -5.00, optionally with a currency
+     * symbol — and `.00` / `.99`, which thermal printers use for sub-dollar
+     * amounts. The whole-number part is therefore optional; [moneyIn] rejects the
+     * bare-decimal form when something numeric precedes it, so the tail of
+     * "12.34.56" isn't read as a second amount.
+     */
+    private val moneyRe =
+        Regex("""(-)?\s*[$€£₹¥]?\s*(\d{1,3}(?:[,.]\d{3})*|\d+)?([.,])(\d{2})(?!\d)""")
 
     private val grandTotalRe = Regex(
         """\b(grand\s*total|total\s*due|total\s*amount|amount\s*due|balance\s*due|amount\s*paid)\b""",
@@ -29,7 +36,9 @@ object ReceiptParser {
         "change", "cash", "card", "visa", "mastercard", "amex", "debit", "credit",
         "tender", "balance", "due", "payment", "paid", "auth", "approval", "ref",
         "terminal", "acct", "account", "invoice", "receipt", "thank", "welcome",
-        "survey", "www", "http", "tel", "phone", "register", "cashier", "server"
+        "survey", "www", "http", "tel", "phone", "register", "cashier", "server",
+        // A bare currency code next to an amount is a label for it, not a purchase.
+        "usd", "eur", "gbp", "inr", "cad", "aud", "jpy", "chf", "sgd", "nzd"
     )
 
     private val notAMerchantRe = words(
@@ -69,26 +78,65 @@ object ReceiptParser {
         if (lines.isEmpty()) return ParsedReceipt()
 
         val allAmounts = lines.flatMap { moneyIn(it) }
+        val total = findTotal(lines, allAmounts)
 
         return ParsedReceipt(
             merchant = findMerchant(lines),
             date = findDate(lines),
-            total = findTotal(lines, allAmounts),
-            subtotal = findLabelled(lines, subtotalRe),
-            tax = findLabelled(lines, taxRe),
+            total = total,
+            subtotal = supported(findLabelled(lines, subtotalRe), total, allAmounts) { it <= total!! },
+            tax = supported(findLabelled(lines, taxRe), total, allAmounts) { it < total!! },
             items = findItems(lines),
             rawText = lines.joinToString("\n")
         )
     }
 
+    /**
+     * Keeps a secondary amount only if the document actually supports it.
+     *
+     * When OCR is poor enough that a single amount is all that survives, every
+     * lookup lands on that same number and the receipt comes back claiming its
+     * subtotal and tax both equal its total. Requiring a second distinct amount
+     * in the document — and a sane relationship to the total — reports nothing
+     * rather than reporting a coincidence as a reading.
+     */
+    private inline fun supported(
+        amount: Double?,
+        total: Double?,
+        allAmounts: List<Double>,
+        sane: (Double) -> Boolean
+    ): Double? {
+        if (amount == null) return null
+        if (allAmounts.toSet().size <= 1) return null
+        if (total == null) return amount
+        return if (sane(amount)) amount else null
+    }
+
     // --- amounts ---------------------------------------------------------
 
-    fun moneyIn(line: String): List<Double> =
+    fun moneyIn(line: String): List<Double> = moneyMatches(line).map { it.second }
+
+    /** Amounts with the span they occupy, so callers can split label from value. */
+    private fun moneyMatches(line: String): List<Pair<IntRange, Double>> =
         moneyRe.findAll(line).mapNotNull { m ->
-            val negative = m.groupValues[1] == "-"
-            val whole = m.groupValues[2].replace(",", "").replace(".", "")
-            val cents = m.groupValues[3]
-            "$whole.$cents".toDoubleOrNull()?.let { if (negative) -it else it }
+            val whole = m.groupValues[2]
+
+            if (whole.isEmpty()) {
+                // A bare ".00" is only an amount when it starts one.
+                val beforeSeparator = (m.groups[3]?.range?.first ?: 0) - 1
+                if (beforeSeparator >= 0) {
+                    val previous = line[beforeSeparator]
+                    if (previous.isDigit() || previous == '.' || previous == ',') {
+                        return@mapNotNull null
+                    }
+                }
+            }
+
+            val digits = whole.replace(",", "").replace(".", "").ifEmpty { "0" }
+            val value = "$digits.${m.groupValues[4]}".toDoubleOrNull()
+                ?: return@mapNotNull null
+
+            m.range to if (m.groupValues[1] == "-") -value else value
         }.toList()
 
     /** Receipts right-align amounts, so the last one on a line is the one that matters. */
@@ -163,7 +211,8 @@ object ReceiptParser {
         // Strongest signal: an explicitly labelled grand total.
         for (i in lines.indices) {
             val line = lines[i]
-            if (subtotalRe.containsMatchIn(line)) continue
+            // "TOTAL TAX" is a tax line, not the total.
+            if (subtotalRe.containsMatchIn(line) || taxRe.containsMatchIn(line)) continue
             if (grandTotalRe.containsMatchIn(line)) {
                 val amount = lastMoney(line) ?: moneyOnFollowingLine(lines, i)
                 if (amount != null) return amount
@@ -172,7 +221,8 @@ object ReceiptParser {
         // Next best: a bare "TOTAL" line. Scan bottom-up, since totals live at the end.
         for (i in lines.indices.reversed()) {
             val line = lines[i]
-            if (subtotalRe.containsMatchIn(line)) continue
+            // "TOTAL TAX" is a tax line, not the total.
+            if (subtotalRe.containsMatchIn(line) || taxRe.containsMatchIn(line)) continue
             if (totalRe.containsMatchIn(line)) {
                 val amount = lastMoney(line) ?: moneyOnFollowingLine(lines, i)
                 if (amount != null) return amount
@@ -197,10 +247,9 @@ object ReceiptParser {
         for (line in lines) {
             if (notAnItemRe.containsMatchIn(line)) continue
 
-            val match = moneyRe.findAll(line).lastOrNull() ?: continue
-            val amount = moneyIn(line).lastOrNull() ?: continue
+            val (span, amount) = moneyMatches(line).lastOrNull() ?: continue
 
-            val label = line.substring(0, match.range.first)
+            val label = line.substring(0, span.first)
                 .trim(' ', '.', '-', '*', ':', '\t', '$')
             if (label.count { it.isLetter() } < 2) continue
             if (label.length > 48) continue

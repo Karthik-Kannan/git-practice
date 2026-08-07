@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Rect
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.util.Size
@@ -45,6 +46,12 @@ class MainActivity : AppCompatActivity() {
     private val recognizer by lazy {
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
+
+    /** Separate client so re-reading a still never contends with the live analyzer. */
+    private val stillRecognizer by lazy {
+        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    }
+    private lateinit var stillExecutor: ExecutorService
     private val accumulator = ReceiptAccumulator()
     private val autoCapture = AutoCapture()
 
@@ -53,6 +60,21 @@ class MainActivity : AppCompatActivity() {
     private var cameraStarted = false
     private var autoCaptureEnabled = true
     private var captureInFlight = false
+    private var pendingCapture: String? = null
+
+    /**
+     * Without this, a capture that never calls back leaves [captureInFlight] stuck
+     * and both the button and auto-capture go silently dead until a restart.
+     */
+    private val captureWatchdog = Runnable {
+        if (pendingCapture != null) {
+            Log.w(TAG, "Capture timed out")
+            pendingCapture = null
+            captureInFlight = false
+            autoCapture.rearm()
+            toast("Capture timed out — try again")
+        }
+    }
 
     private val requestCamera = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -66,6 +88,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         analysisExecutor = Executors.newSingleThreadExecutor()
+        stillExecutor = Executors.newSingleThreadExecutor()
 
         binding.btnCapture.setOnClickListener { capture() }
         binding.btnAuto.setOnClickListener {
@@ -90,7 +113,10 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         analysisExecutor.shutdown()
+        stillExecutor.shutdown()
+        binding.root.removeCallbacks(captureWatchdog)
         recognizer.close()
+        stillRecognizer.close()
     }
 
     private fun hasCameraPermission() =
@@ -279,35 +305,105 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (captureInFlight) return
-        captureInFlight = true
 
         val id = UUID.randomUUID().toString()
+        captureInFlight = true
+        pendingCapture = id
+        // Nothing downstream is allowed to strand the shutter closed.
+        binding.root.postDelayed(captureWatchdog, CAPTURE_TIMEOUT_MS)
+        toast("Captured — re-reading…")
+
         val photo = File(ReceiptStore.imageDir(this), "$id.jpg")
         val capture = imageCapture
-
         if (capture == null) {
             persist(id, null, stable.receipt)
             return
         }
 
-        capture.takePicture(
-            ImageCapture.OutputFileOptions.Builder(photo).build(),
-            ContextCompat.getMainExecutor(this),
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(results: ImageCapture.OutputFileResults) {
-                    persist(id, photo.absolutePath, stable.receipt)
-                }
+        try {
+            capture.takePicture(
+                ImageCapture.OutputFileOptions.Builder(photo).build(),
+                ContextCompat.getMainExecutor(this),
+                object : ImageCapture.OnImageSavedCallback {
+                    override fun onImageSaved(results: ImageCapture.OutputFileResults) {
+                        rescanThenPersist(id, photo, stable.receipt)
+                    }
 
-                override fun onError(exception: ImageCaptureException) {
-                    // The parse is the valuable part — keep it even without the photo.
-                    Log.w(TAG, "Photo capture failed", exception)
-                    persist(id, null, stable.receipt)
+                    override fun onError(exception: ImageCaptureException) {
+                        // The parse is the valuable part — keep it even without the photo.
+                        Log.w(TAG, "Photo capture failed", exception)
+                        persist(id, null, stable.receipt)
+                    }
                 }
-            }
-        )
+            )
+        } catch (e: Throwable) {
+            Log.e(TAG, "takePicture threw", e)
+            persist(id, null, stable.receipt)
+        }
     }
 
+    /**
+     * The preview parse comes from a ~720p analysis frame; the still we just wrote
+     * is full sensor resolution. On a long or small-print receipt that is several
+     * times more pixels per character, which is the difference between reading the
+     * total and guessing it — so read the good image before saving.
+     */
+    private fun rescanThenPersist(id: String, photo: File, previewParse: ParsedReceipt) {
+        stillExecutor.execute {
+            val image = try {
+                InputImage.fromFilePath(this, Uri.fromFile(photo))
+            } catch (e: Exception) {
+                Log.w(TAG, "Couldn't reopen the still", e)
+                runOnUiThread { persist(id, photo.absolutePath, previewParse) }
+                return@execute
+            }
+
+            stillRecognizer.process(image)
+                .addOnSuccessListener { text ->
+                    val fromStill = parseRecognised(text)
+                    // A blurred still can be worse than the frames we averaged;
+                    // keep whichever actually read more of the receipt.
+                    val best = if (fromStill.quality() >= previewParse.quality()) {
+                        fromStill
+                    } else {
+                        previewParse
+                    }
+                    persist(id, photo.absolutePath, best)
+                }
+                .addOnFailureListener { error ->
+                    Log.w(TAG, "Full-resolution OCR failed", error)
+                    persist(id, photo.absolutePath, previewParse)
+                }
+        }
+    }
+
+    /**
+     * Same pipeline the live path uses, minus the colour rule — a JPEG has no
+     * chroma planes to sample, so only the type-size filter applies here.
+     */
+    private fun parseRecognised(text: Text): ParsedReceipt {
+        val lines = text.textBlocks
+            .flatMap { it.lines }
+            .mapNotNull { line ->
+                val box = line.boundingBox ?: return@mapNotNull null
+                ScannedLine(line.text, box.left, box.top, box.right, box.bottom)
+            }
+            .sortedWith(compareBy({ it.top }, { it.left }))
+
+        val kept = FrameFilter.classify(lines).filter { it.isReceipt }
+        return ReceiptParser.parse(kept.map { it.text })
+    }
+
+    /** Fields found first, then item detail, then sheer volume of text. */
+    private fun ParsedReceipt.quality(): Int =
+        filledFields * 10_000 + items.size * 100 + (rawText.length / 50).coerceAtMost(99)
+
     private fun persist(id: String, imagePath: String?, receipt: ParsedReceipt) {
+        // The watchdog may have already given up on this one.
+        if (pendingCapture != id) return
+        pendingCapture = null
+        binding.root.removeCallbacks(captureWatchdog)
+
         ReceiptStore.add(
             this,
             SavedReceipt(
@@ -330,5 +426,8 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "ReceiptSnap"
+
+        /** Generous: full-resolution OCR is slow on entry-level hardware. */
+        const val CAPTURE_TIMEOUT_MS = 20_000L
     }
 }

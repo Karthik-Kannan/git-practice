@@ -114,6 +114,104 @@ class ReceiptParserTest {
     }
 
     @Test
+    fun `a lone surviving amount is not reported as subtotal and tax too`() {
+        // Straight from a real capture: OCR mangled everything except one amount,
+        // so every lookup landed on it and the receipt claimed subtotal == tax ==
+        // total == 3.99. Tax equal to the total is impossible.
+        val lines = listOf(
+            "Luoky",
+            "h W Cecol tol Exoresswa/",
+            "Coshier: FastLanel",
+            "TOTAL TAK",
+            "TOTAL",
+            "USD\$ 3.99",
+            "Total:",
+            "SHOPPING AT LICKV"
+        )
+        val parsed = ReceiptParser.parse(lines)
+
+        assertEquals(3.99, parsed.total!!, 0.001)
+        assertNull(parsed.subtotal)
+        assertNull(parsed.tax)
+    }
+
+    /** Transcribed from a real Lucky receipt, including its zero tax line. */
+    private val lucky = """
+        Lucky
+        565 W Capitol Expressway
+        (408) 445-6900
+        Store:758
+        08/06/26          18:30:12
+        Cashier: FastLane1
+        PRODUCE-GARDEN
+        SSL PTO BABY GOLD        3.99F
+        SUBTOTAL      3.99
+        TOTAL TAX       .00
+        TOTAL         3.99
+        Visa    TENDER      3.99
+        CASH    CHANGE       .00
+        NUMBER OF ITEMS    1
+    """.trimIndent().lines()
+
+    @Test
+    fun `reads amounts printed without a leading zero`() {
+        // Thermal printers drop the leading zero on sub-dollar amounts.
+        assertEquals(0.0, ReceiptParser.moneyIn("TOTAL TAX   .00").last(), 0.001)
+        assertEquals(0.99, ReceiptParser.moneyIn("CANDY   .99").last(), 0.001)
+    }
+
+    @Test
+    fun `a bare decimal is not read off the tail of another number`() {
+        assertEquals(listOf(12.34), ReceiptParser.moneyIn("REF 12.34.56"))
+    }
+
+    @Test
+    fun `reports a genuine zero tax rather than nothing`() {
+        val parsed = ReceiptParser.parse(lucky)
+        assertEquals(3.99, parsed.total!!, 0.001)
+        assertEquals(3.99, parsed.subtotal!!, 0.001)
+        assertEquals(0.0, parsed.tax!!, 0.001)
+    }
+
+    @Test
+    fun `TOTAL TAX is not mistaken for the total`() {
+        assertEquals("Lucky", ReceiptParser.parse(lucky).merchant)
+        assertEquals("08/06/26", ReceiptParser.parse(lucky).date)
+        // The tax line sits directly above the total; the total must still win.
+        assertEquals(3.99, ReceiptParser.parse(lucky).total!!, 0.001)
+    }
+
+    @Test
+    fun `keeps the purchase and drops the payment lines`() {
+        val labels = ReceiptParser.parse(lucky).items.map { it.label }
+        assertTrue(labels.contains("SSL PTO BABY GOLD"))
+        assertTrue(labels.none { it.contains("TENDER", true) })
+        assertTrue(labels.none { it.contains("CHANGE", true) })
+        assertTrue(labels.none { it.contains("SUBTOTAL", true) })
+    }
+
+    @Test
+    fun `a bare currency code is not a purchased item`() {
+        val labels = ReceiptParser.parse(listOf("SHOP", "USD\$ 3.99", "TOTAL 3.99"))
+            .items.map { it.label }
+        assertTrue(labels.none { it.equals("USD", ignoreCase = true) })
+    }
+
+    @Test
+    fun `tax at or above the total is discarded`() {
+        val lines = listOf("SHOP", "WIDGET 5.00", "TAX 9.99", "TOTAL 9.99")
+        assertNull(ReceiptParser.parse(lines).tax)
+    }
+
+    @Test
+    fun `a genuine subtotal and tax still come through`() {
+        // The guards must not cost us the normal case.
+        val parsed = ReceiptParser.parse(grocery)
+        assertEquals(14.98, parsed.subtotal!!, 0.001)
+        assertEquals(1.20, parsed.tax!!, 0.001)
+    }
+
+    @Test
     fun `empty input stays empty`() {
         val parsed = ReceiptParser.parse(listOf("", "   "))
         assertNull(parsed.total)
