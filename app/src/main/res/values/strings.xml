@@ -9,4 +9,5 @@
     <string name="scanning">Point at a receipt&#8230;</string>
     <string name="no_receipts">No receipts yet.\nScan one from the camera screen.</string>
     <string name="delete">Delete</string>
+    <string name="auto">AUTO</string>
 </resources>

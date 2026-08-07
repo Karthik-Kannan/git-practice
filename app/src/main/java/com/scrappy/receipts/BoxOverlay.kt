@@ -59,6 +59,16 @@ class BoxOverlay @JvmOverloads constructor(
         color = Color.argb(70, 248, 113, 113)
     }
 
+    /** Viewfinder brackets around the detected receipt. */
+    private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = dp(3f)
+        strokeCap = Paint.Cap.ROUND
+    }
+
+    private var frame: Rect? = null
+    private var frameProgress = 0f
+
     private val scratch = RectF()
 
     /**
@@ -72,11 +82,25 @@ class BoxOverlay @JvmOverloads constructor(
         postInvalidateOnAnimation()
     }
 
-    fun clear() = update(emptyList(), sourceWidth, sourceHeight)
+    /**
+     * @param progress 0..1 toward auto-capture; the brackets warm from white to
+     *                 the accent colour as it fills.
+     */
+    fun setFrame(bounds: Rect?, progress: Float) {
+        frame = bounds
+        frameProgress = progress.coerceIn(0f, 1f)
+        postInvalidateOnAnimation()
+    }
+
+    fun clear() {
+        frame = null
+        frameProgress = 0f
+        update(emptyList(), sourceWidth, sourceHeight)
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (boxes.isEmpty() || sourceWidth <= 0 || sourceHeight <= 0) return
+        if (sourceWidth <= 0 || sourceHeight <= 0) return
 
         // PreviewView defaults to FILL_CENTER, so match that mapping: scale to cover,
         // then centre the overflow.
@@ -84,6 +108,9 @@ class BoxOverlay @JvmOverloads constructor(
         val offsetX = (width - sourceWidth * scale) / 2f
         val offsetY = (height - sourceHeight * scale) / 2f
         val radius = dp(3f)
+
+        frame?.let { drawBrackets(canvas, it, scale, offsetX, offsetY) }
+        if (boxes.isEmpty()) return
 
         for (box in boxes) {
             scratch.set(
@@ -103,5 +130,43 @@ class BoxOverlay @JvmOverloads constructor(
         }
     }
 
+    private fun drawBrackets(canvas: Canvas, rect: Rect, scale: Float, dx: Float, dy: Float) {
+        val pad = dp(10f)
+        val left = rect.left * scale + dx - pad
+        val top = rect.top * scale + dy - pad
+        val right = rect.right * scale + dx + pad
+        val bottom = rect.bottom * scale + dy + pad
+
+        // Corner arms, sized off the shorter edge so they stay proportional.
+        val arm = minOf(right - left, bottom - top) * 0.16f
+        if (arm <= 0f) return
+
+        framePaint.color = blend(Color.WHITE, ACCENT, frameProgress)
+        framePaint.alpha = (140 + 115 * frameProgress).toInt().coerceIn(0, 255)
+
+        // Top-left, top-right, bottom-left, bottom-right.
+        canvas.drawLine(left, top, left + arm, top, framePaint)
+        canvas.drawLine(left, top, left, top + arm, framePaint)
+        canvas.drawLine(right, top, right - arm, top, framePaint)
+        canvas.drawLine(right, top, right, top + arm, framePaint)
+        canvas.drawLine(left, bottom, left + arm, bottom, framePaint)
+        canvas.drawLine(left, bottom, left, bottom - arm, framePaint)
+        canvas.drawLine(right, bottom, right - arm, bottom, framePaint)
+        canvas.drawLine(right, bottom, right, bottom - arm, framePaint)
+    }
+
+    private fun blend(from: Int, to: Int, amount: Float): Int {
+        val t = amount.coerceIn(0f, 1f)
+        return Color.rgb(
+            (Color.red(from) + (Color.red(to) - Color.red(from)) * t).toInt(),
+            (Color.green(from) + (Color.green(to) - Color.green(from)) * t).toInt(),
+            (Color.blue(from) + (Color.blue(to) - Color.blue(from)) * t).toInt()
+        )
+    }
+
     private fun dp(value: Float) = value * resources.displayMetrics.density
+
+    private companion object {
+        val ACCENT = Color.parseColor("#FF4ADE80")
+    }
 }

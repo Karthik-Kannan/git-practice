@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.os.Bundle
 import android.util.Log
 import android.util.Size
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,10 +46,13 @@ class MainActivity : AppCompatActivity() {
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
     private val accumulator = ReceiptAccumulator()
+    private val autoCapture = AutoCapture()
 
     private var imageCapture: ImageCapture? = null
     private var latest: ReceiptAccumulator.Stable? = null
     private var cameraStarted = false
+    private var autoCaptureEnabled = true
+    private var captureInFlight = false
 
     private val requestCamera = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -64,6 +68,17 @@ class MainActivity : AppCompatActivity() {
         analysisExecutor = Executors.newSingleThreadExecutor()
 
         binding.btnCapture.setOnClickListener { capture() }
+        binding.btnAuto.setOnClickListener {
+            autoCaptureEnabled = !autoCaptureEnabled
+            autoCapture.rearm()
+            binding.btnAuto.setTextColor(
+                ContextCompat.getColor(
+                    this,
+                    if (autoCaptureEnabled) R.color.accent else R.color.text_dim
+                )
+            )
+            if (!autoCaptureEnabled) binding.overlay.setFrame(null, 0f)
+        }
         binding.btnSaved.setOnClickListener {
             startActivity(Intent(this, ReceiptsActivity::class.java))
         }
@@ -209,13 +224,31 @@ class MainActivity : AppCompatActivity() {
 
         val stable = accumulator.push(ReceiptParser.parse(receiptLines.map { it.text }))
         latest = stable
-        render(stable, receiptLines.size)
+
+        var hint: String? = null
+        if (autoCaptureEnabled && !captureInFlight) {
+            val verdict = autoCapture.observe(
+                receiptLines, sourceWidth, sourceHeight, stable.confidence
+            )
+            hint = verdict.hint
+            binding.overlay.setFrame(
+                verdict.bounds?.let { Rect(it.left, it.top, it.right, it.bottom) },
+                verdict.progress
+            )
+            if (verdict.fire) {
+                binding.overlay.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                capture()
+            }
+        }
+
+        render(stable, receiptLines.size, hint)
     }
 
-    private fun render(stable: ReceiptAccumulator.Stable, lineCount: Int) {
+    private fun render(stable: ReceiptAccumulator.Stable, lineCount: Int, hint: String?) {
         val receipt = stable.receipt
 
         binding.statusPill.text = when {
+            hint != null -> hint
             lineCount == 0 -> getString(R.string.scanning)
             else -> "Reading $lineCount lines"
         }
@@ -245,6 +278,8 @@ class MainActivity : AppCompatActivity() {
             toast("Nothing to capture yet")
             return
         }
+        if (captureInFlight) return
+        captureInFlight = true
 
         val id = UUID.randomUUID().toString()
         val photo = File(ReceiptStore.imageDir(this), "$id.jpg")
@@ -285,6 +320,8 @@ class MainActivity : AppCompatActivity() {
         // Start clean so the next receipt doesn't inherit this one's votes.
         accumulator.reset()
         binding.overlay.clear()
+        autoCapture.rearm()
+        captureInFlight = false
         toast("Saved ${receipt.merchant ?: "receipt"} · ${formatMoney(receipt.total)}")
     }
 
