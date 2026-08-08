@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ReceiptSnap</string>
+    <string name="saved_receipts">Saved receipts</string>
+    <string name="receipt">Receipt</string>
+    <string name="capture">Capture</string>
+    <string name="camera_permission_rationale">ReceiptSnap needs the camera to read receipts.</string>
+    <string name="grant_permission">Grant camera access</string>
+    <string name="scanning">Point at a receipt&#8230;</string>
+    <string name="no_receipts">No receipts yet.\nScan one from the camera screen.</string>
+    <string name="delete">Delete</string>
+    <string name="auto">AUTO</string>
+
+    <string name="probe_title">Crop probe</string>
+    <string name="probe_prev">◀</string>
+    <string name="probe_next">▶</string>
+    <string name="probe_read_crop">Read crop</string>
+    <string name="probe_read_full">Read full</string>
+    <string name="probe_header">%1$d/%2$d · %3$d×%4$d px · exif %5$d°</string>
+    <string name="probe_instructions">Drag a box over the merchant name or the totals block, then Read crop. Compare against Read full.</string>
+    <string name="probe_reading">Reading…</string>
+    <string name="probe_drag_first">Drag a box over the photo first</string>
+    <string name="probe_no_photos">No saved receipts with photos yet. Capture one first.</string>
+    <string name="probe_decode_failed">Couldn\'t decode that region.</string>
+    <string name="probe_ocr_failed">OCR failed.</string>
+    <string name="probe_nothing_read">(nothing read)</string>
+</resources>
