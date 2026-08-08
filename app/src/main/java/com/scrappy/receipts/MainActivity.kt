@@ -105,6 +105,11 @@ class MainActivity : AppCompatActivity() {
         binding.btnSaved.setOnClickListener {
             startActivity(Intent(this, ReceiptsActivity::class.java))
         }
+        // Measurement harness: does ML Kit read a tight, full-resolution crop?
+        binding.btnSaved.setOnLongClickListener {
+            startActivity(Intent(this, CropProbeActivity::class.java))
+            true
+        }
         binding.btnGrant.setOnClickListener { requestCamera.launch(Manifest.permission.CAMERA) }
 
         if (hasCameraPermission()) startCamera() else requestCamera.launch(Manifest.permission.CAMERA)

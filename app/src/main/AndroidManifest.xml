@@ -39,6 +39,13 @@
             android:parentActivityName=".ReceiptsActivity"
             android:theme="@style/Theme.ReceiptSnap.Bar" />
 
+        <activity
+            android:name=".CropProbeActivity"
+            android:exported="false"
+            android:label="@string/probe_title"
+            android:parentActivityName=".MainActivity"
+            android:theme="@style/Theme.ReceiptSnap.Bar" />
+
     </application>
 
 </manifest>
